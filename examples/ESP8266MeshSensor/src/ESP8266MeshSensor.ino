@@ -21,11 +21,10 @@
 #define GREEN_LED   15 //MTDO
 #define RELAY       12 //MTDI
 #define BUTTON       0 //GPIO0
-//#define DS18B20      2 //GPIO2
+#define DS18B20      2 //GPIO2
 #define HLW8012_SEL  5 //GPIO5
 #define HLW8012_CF  14 //MTMS
 #define HLW8012_CF1 13 //MTCK
-
 
 /* See credentials.h.examle for contents of credentials.h */
 #include "credentials.h"
@@ -52,9 +51,13 @@
     #define      FIRMWARE_ID        0x4452
 #endif
 
-#define      FIRMWARE_VER       "0.8"
-const char*  networks[]       = NETWORK_LIST;
-const char*  network_password = NETWORK_PASSWORD;
+#define      FIRMWARE_VER       "0.8.1"
+//const char*  networks[]       = NETWORK_LIST;
+const wifi_conn networks[] = {
+    WIFI_CONN("foo", NETWORK_PASSWORD, NULL, false),
+    WIFI_CONN("bar", NETWORK_PASSWORD, "XX:XX:XX:XX:XX:XX", true),
+    NULL
+};
 const char*  mesh_password    = MESH_PASSWORD;
 const char*  mqtt_server      = MQTT_SERVER;
 
@@ -87,12 +90,13 @@ double hlw8012_getCurrent();
 unsigned int hlw8012_getVoltage();
 #endif
 
-ESP8266MQTTMesh mesh = ESP8266MQTTMesh::Builder(networks, network_password, mqtt_server)
+ESP8266MQTTMesh mesh = ESP8266MQTTMesh::Builder(networks, mqtt_server)
                      .setVersion(FIRMWARE_VER, FIRMWARE_ID)
                      .setMeshPassword(mesh_password)
                      .build();
 
 bool relayState = false;
+bool stateChanged = false;
 int  heartbeat  = 60000;
 float temperature = 0.0;
 
@@ -185,14 +189,17 @@ void loop() {
         if(pressed == 0) {
             relayState = ! relayState;
             digitalWrite(RELAY, relayState);
-            save_config();
-            needToSend = true;
+            stateChanged = true;
         }
         pressed = now;
     } else if (pressed && now - pressed > 100) {
         pressed = 0;
     }
-    if (now - lastSend > heartbeat) {
+    if (stateChanged) {
+        save_config();
+        needToSend = true;
+        stateChanged = false;
+    } else if (now - lastSend > heartbeat) {
         needToSend = true;
     }
     if (! mesh.connected()) {
@@ -218,6 +225,14 @@ void callback(const char *topic, const char *msg) {
        if (hb > 10000) {
            heartbeat = hb;
            save_config();
+       }
+    }
+    else if (0 == strcmp(topic, "state")) {
+       bool nextState = strtoul(msg, NULL, 10) ? true : false;
+       if (relayState != nextState) {
+           relayState = nextState;
+           digitalWrite(RELAY, relayState);
+           stateChanged = true;
        }
     }
 #if HAS_HLW8012
